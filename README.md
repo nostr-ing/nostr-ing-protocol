@@ -1,70 +1,61 @@
-#nostr-ing - A second layer protocol for streaming non-text data on nostr
+# nostr-ing: Transmitting non-text data on top of nostr
 
-nostr-ing is a second layer to the nostr-protocol that allows transmission of non-text data by Relays on top of the base protocol.
+## Motivation
 
-nostr-ing is a work-in-progress!
+Traditional networks and social media rely on trust in central entities. Whether it is authentication, verification, storage, or distribution, they do everything today. The nostr protocol seeks to decentralize these networks. According to the protocols repository, nostr is:
 
-## A brief introduction to nostr
+>“The simplest open protocol that is able to create a censorship-resistant global "social" network once and for all. It doesn't rely on any trusted central server, hence it is resilient; it is based on cryptographic keys and signatures, so it is tamperproof; it does not rely on P2P techniques, therefore it works.” [[1]](https://github.com/nostr-protocol/nostr)
 
-From the nostr-protocol repository:
+Over the last two decades, social media has become more visual. One can easily witness this when observing the current nostr feeds. Because the protocol does not natively support the transmission of non-text images, users started to upload their media files on central servers and include links to those in their posts, leading to problems:
 
->The simplest open protocol that is able to create a censorship-resistant globall "social" network once and for all. It doesn't rely on any trusted central server, hence it is resilient; it is based on cryptographic keys and signatures, so it is tamperproof; it does not rely on P2P techniques, therefore it works.
+1. Hosting providers can change the file inside a URL without invalidating the note
+2. Hosting providers can arbitrarily censor or shut down content
 
-## Why have a second layer?
+Instead, we need a way to transmit cryptographically secure non-text files to multiple relays.
 
-Nostr is awesome, but it was built to excel at handling text. Sending other file-types introduces inefficiencies due to encoding. Therefore we propose a second protocol that operates on top of nostr and that is optimised to transmit raw data chunks.
+## Transmitting non-text data on nostr
 
-## How does it work?
+nostr excels at text data transmission. Clients and Relays transmit events as JSON-serialized strings. If we want to transmit an image to multiple relays, we need to encode it in JSON-safe format, introducing inefficiencies. For example, the Base64 encoding increases the required storage space by approximately 33% as Base64 requires an 8-bit character to store 6 bits of raw data. [[2]](https://www.ietf.org/rfc/rfc4648.txt)
 
-### Connecting
+These inefficiencies are particularly problematic because storage and bandwidth requirements directly affect the costs of running a nostr relay and, therefore, also the potential decentralization of relays in general.
 
-nostr-ing connections between clients do not replace the original nostr connection, but are complementary. Clients will establish a connection on the no-string protocol only when receiving or sending non-text data and close them once they are done.
+## A second layer for binary data
 
-Clients will ask Relays for a nostr-ing connection by adding "Sec-WebSocket-Protocol: nostr-ing" to the handshake. The client will also specify a unique file-Id when connecting to a Relay by adding it as a query parameter to the connection string.
+The solution we propose to solve the problem outlined above is a new protocol that acts as a second layer to the nostr base layer. It is specifically designed to excel at the transmission and storage of binary data. WebSockets, the protocol that nostr is based on, already directly supports the transmission of raw binary data. Therefore we can reuse most of the infrastructure already available to standard nostr relays. When clients send or request a non-text file to or from a relay, they open a second connection that will transmit binary data only. As this second layer is optional to the base layer, not every nostr relay will be able to support these requests. Therefore, clients use WebSockets sub-protocol header “Sec-WebSocket-Protocol” to signal the requirement of a binary-only connection according to this proposal.
 
-#### file-ids
+## Transmitting data
 
-File-ids are 128-bit UUIDs that are used to identify transmissions and act as a "room" for the transmission. Every client involved in a transmission (either broadcasting or listening) attaches the file-id to the connection string.
+A file stream on nostr-ing is called a Transmission. Every transmission has two parts to it:
+Data
+Metadata
 
-### Discovery
+To maximize compatibility and lay the groundwork for continuous data (e.g., live audio streaming), data on nostr-ing is transmitted in chunks. We do not define a maximum chunk size and leave it to clients and relays to agree on. It is worth pointing out though that the choice of chunk size can directly affect the potential decentralization of a transmission.
+Additionally to the chunked data, a client publishes a single event on the nostr base layer, acting as a metadata store and helping with transmission discovery.
 
-File transmissions can be published to the nostr network by transmitting a note that contains the file-id.
+### Data chunks
 
-### Sending Data
+As described above data on nostr-ing is divided into chunks. A data chunk is always structured like so:
 
-On the nostr-ing protocol, data is sent as binary chunks. A events payload is always structured  as follows:
+`Data Length (4 bytes) - Data - Sequence Num - Transmission ID (32 bytes) - Signature (32 bytes)`
 
-4 Bytes - Length of data in bytes
-X Bytes - Data
-X Bytes - Metadata
+`Data Length`: The length of the data chunk inside this message in bytes.
 
-There is no maximum payload length specified, but note that some relays might choose to reject large payloads.
+`Data`: The data chunk itself
 
-#### Metadata
+`Sequence Num`: The sequence number of this chunk. When splitting a client will number all chunks starting with 0
 
-Nostr-ing payloads always include metadata, such as the Content-Range, the Senders pubkey and a signature. Metadata is appended to the end of the payload. 
+`Transmission ID`: The Id of this transmission. It will be the event Id of the metadata event. 
 
+`Signature`: A signature of the whole message according to Schnorr Secp256k1
 
-### Signing Data
+### Metadata event
 
-In order to stop Relays or MIM from modifying data, its origin and integrity must be verifiable by every client. An easy solution for verifying files would be to hash them and publish a singed message of a files hash on nostr.
+The metadata event is an entry point for a nostr-ing transmission and is unlike data chunks sent directly to the nostr base layer. It contains a transmission’s metadata and acts as a hinge point for all data chunks. In order to avoid incompatible relays and clients storing this metadata, we propose a new kind ‘x’. Kind ‘x’ can be used to transmit all kind of metadata about a transmission, but they need to carry at least these key value pairs:
+Transmission-Length: Total size of a transmission in bytes (for continuous data this is ‘*’)
+Transmission-Type: Filetype transmitted according to MIME
+Chunk-Size: Size of data chunks in bytes
 
-However ==nostr-ing== aims to allow the transfer of files, as well as live data, and therefore every single sent data chunk must be signed. The signature is part of the metadata that is appended to the end of the payload.
+## Receiving Data
 
-### Authentication
+Receiving clients subscribe to transmissions by connecting to a nostr-ing relay and passing a transmission ID as part of the connection url. 
 
-Before a Client can transmit data to a Relay it needs to authenticate. A Relay will challenge a Client on connection to sign a random piece of data. The Client will create a Schnorr Signature over the secp256k1 curve (BIP340) of the challenge and send it back to the Relay.
-
-### Managing permissions
-
-In order to facilitate not only one-to-many broadcasts, but also many-to-many ones (e.g., Twitter Spaces), permissions in nostr-ing rooms can be managed by room admins. By default only the client opening a room is an admin and can set permissions for other clients, by transmitting a set-permission message 
-
-## Message Types
-
-In order to do different things on the network, different types of messages are used. A type is indicated by the first byte of a messages payload.
-
-### Authenticate
-
-### Transmit Data
-
-### Set Permissions
