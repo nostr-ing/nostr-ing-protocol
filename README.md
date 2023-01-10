@@ -36,26 +36,46 @@ Additionally to the chunked data, a client publishes a single event on the nostr
 
 As described above data on nostr-ing is divided into chunks. A data chunk is always structured like so:
 
-`Data Length (4 bytes) - Data - Sequence Num - Transmission ID (32 bytes) - Signature (32 bytes)`
+`data-length (4 bytes) - data - sequence-number - transmission-id (32 bytes) - signature (32 bytes)`
 
-`Data Length`: The length of the data chunk inside this message in bytes.
+`data-length`: The length of the data chunk inside this message in bytes.
 
-`Data`: The data chunk itself
+`data`: The data chunk itself
 
-`Sequence Num`: The sequence number of this chunk. When splitting a client will number all chunks starting with 0
+`sequence-number`: The sequence number of this chunk. When splitting a client will number all chunks starting with 0
 
-`Transmission ID`: The Id of this transmission. It will be the event Id of the metadata event. 
+`transmission-id`: The Id of this transmission. It will be the event Id of the metadata event. 
 
-`Signature`: A signature of the whole message according to Schnorr Secp256k1
+`signature`: A signature of the whole message according to Schnorr Secp256k1
 
 ### Metadata event
 
-The metadata event is an entry point for a nostr-ing transmission and is unlike data chunks sent directly to the nostr base layer. It contains a transmission’s metadata and acts as a hinge point for all data chunks. In order to avoid incompatible relays and clients storing this metadata, we propose a new kind ‘x’. Kind ‘x’ can be used to transmit all kind of metadata about a transmission, but they need to carry at least these key value pairs:
-Transmission-Length: Total size of a transmission in bytes (for continuous data this is ‘*’)
-Transmission-Type: Filetype transmitted according to MIME
-Chunk-Size: Size of data chunks in bytes
+The metadata event is an entry point for a nostr-ing transmission and is unlike data chunks sent directly to the nostr base layer. It contains a transmission’s metadata and acts as a hinge point for all data chunks, as all file chunks contain it's event-id.
+
+In order to avoid incompatible relays and clients storing this metadata, we propose a new kind `X`. Kind `X` is used to transmit all kind of metadata about a transmission, but they need to carry at least these key value pairs:
+
+`transmission-length`: Total size of a transmission in bytes (for continuous data this is ‘*’)
+
+`transmission-type`: Filetype transmitted according to MIME
+
+`chunk-size`: Size of data chunks in bytes
 
 ## Receiving Data
 
-Receiving clients subscribe to transmissions by connecting to a nostr-ing relay and passing a transmission ID as part of the connection url. 
+Receiving clients subscribe to transmissions by connecting to a nostr-ing relay and passing a transmission ID as part of the connection url.
+
+## Storing Data
+
+A Relay will store data chunks in two collections / tables.
+
+1. Files
+2. Data
+
+### Files
+
+The `Files` table stores all metadata events of kind `X` indexed by event-id. It can be queried to receive metadata about a transmission or to initialize one.
+
+### Data
+
+The `Data` table stores all data chunks indexed by their transmission-id (event-id) and sequence-number. It can be queried to receive all data chunks of a transmission or allow for range queries by specifying a sequence-number.
 
